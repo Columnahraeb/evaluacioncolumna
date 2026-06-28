@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#13294B" />
+<title>mJOA · Nurick — Evaluación cervical</title>
+<style>
+  html, body { margin:0; padding:0; background:#F7F4ED; -webkit-text-size-adjust:100%; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  button, input { font-family: inherit; }
+  input, button { -webkit-appearance: none; appearance: none; }
+</style>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState } = React;
+
+const C = {
+  navy: "#13294B",
+  navyDeep: "#0B1B33",
+  wine: "#8B1A1A",
+  amber: "#C17817",
+  sand: "#F7F4ED",
+  sandDeep: "#EFEADD",
+  line: "#E2DCCB",
+  ink: "#23231F",
+  inkSoft: "#6B6557",
+  inkFaint: "#9B9484",
+  white: "#FFFFFF",
+  good: "#2F6B4F",
+};
+
+const MOMENTOS = [
+  { key: "preop", label: "Preoperatorio" },
+  { key: "postop_inmediato", label: "Posoperatorio inmediato" },
+  { key: "3sem", label: "3 semanas" },
+  { key: "3meses", label: "3 meses" },
+  { key: "6meses", label: "6 meses" },
+  { key: "1ano", label: "1 año" },
+  { key: "2anos", label: "2 años" },
+];
+
+// PEGAR AQUÍ la URL de tu Apps Script Web App para la pestaña "Cervical" (termina en /exec)
+const SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbx6PWshwZdmNF2z9U66HGeS-3zA559v5PtMY3O1K8lkqoNM3gfoBhMVGSBS-I59elOX/exec";
+
+/* ============================================================
+   DATA — mJOA (modified Japanese Orthopaedic Association)
+   4 dominios: motor brazos (0-5), motor piernas (0-7), sensibilidad brazos (0-3), vejiga (0-3)
+   Total 0-18. Mayor puntaje = mejor función.
+   ============================================================ */
+const MJOA_SECTIONS = [
+  {
+    key: "motor_brazos",
+    title: "Función motora — extremidades superiores",
+    subtitle: "Capacidad de uso de manos",
+    options: [
+      "Incapacidad para mover las manos",
+      "Incapacidad para comer con cuchara, pero puede mover las manos",
+      "Incapacidad para abotonar la camisa, pero puede comer con cuchara",
+      "Puede abotonar la camisa con mucha dificultad",
+      "Puede abotonar la camisa con ligera dificultad",
+      "Sin disfunción",
+    ],
+  },
+  {
+    key: "motor_piernas",
+    title: "Función motora — extremidades inferiores",
+    subtitle: "Capacidad de marcha",
+    options: [
+      "Pérdida completa de función motora y sensitiva",
+      "Preservación sensitiva sin capacidad de mover las piernas",
+      "Puede mover las piernas pero no puede caminar",
+      "Puede caminar en superficie plana con ayuda (bastón o muleta)",
+      "Puede subir y/o bajar escaleras con apoyo de pasamanos",
+      "Inestabilidad moderada a significativa, pero camina sin apoyo en escaleras",
+      "Marcha ligeramente torpe/inestable pero independiente",
+      "Sin disfunción",
+    ],
+  },
+  {
+    key: "sensibilidad_brazos",
+    title: "Función sensitiva — extremidades superiores",
+    subtitle: "Sensibilidad en manos",
+    options: [
+      "Pérdida completa de sensibilidad en las manos",
+      "Alteración sensitiva severa o dolor",
+      "Alteración sensitiva leve",
+      "Sin pérdida sensitiva",
+    ],
+  },
+  {
+    key: "vejiga",
+    title: "Función vesical",
+    subtitle: "Control urinario",
+    options: [
+      "Incapacidad para orinar voluntariamente (retención)",
+      "Dificultad marcada para iniciar la micción / incontinencia severa / retención incompleta",
+      "Sensación de retención urinaria, urgencia, o frecuencia/dificultad leve",
+      "Función vesical normal",
+    ],
+  },
+];
+
+function mjoaInterpretation(total) {
+  if (total >= 15) return { label: "Mielopatía leve", color: C.good, detail: "mJOA 15-17. Función neurológica preservada en su mayoría; vigilancia y manejo según contexto clínico." };
+  if (total >= 12) return { label: "Mielopatía moderada", color: C.amber, detail: "mJOA 12-14. Compromiso funcional moderado; valorar intervención según evolución y hallazgos de imagen." };
+  return { label: "Mielopatía severa", color: C.wine, detail: "mJOA 0-11. Compromiso funcional significativo; suele justificar manejo quirúrgico oportuno." };
+}
+
+/* ============================================================
+   DATA — Nurick (escala clínico-funcional de marcha, 0-5)
+   Mayor grado = peor función. Evaluada por el examinador.
+   ============================================================ */
+const NURICK_OPTIONS = [
+  "Grado 0 — Signos/síntomas de afectación radicular, sin evidencia de enfermedad medular",
+  "Grado 1 — Signos de enfermedad medular, sin dificultad para caminar",
+  "Grado 2 — Ligera dificultad para caminar, no impide el empleo de tiempo completo",
+  "Grado 3 — Dificultad para caminar que impide el empleo de tiempo completo o las labores del hogar, pero no requiere ayuda de otra persona para caminar",
+  "Grado 4 — Puede caminar solo con ayuda de otra persona o con andadera/marco",
+  "Grado 5 — Postrado en silla de ruedas o en cama",
+];
+
+function nurickInterpretation(grade) {
+  if (grade <= 1) return { label: "Sin compromiso de la marcha", color: C.good, detail: "Grado 0-1. Sin alteración funcional de la marcha." };
+  if (grade === 2) return { label: "Compromiso leve", color: C.good, detail: "Grado 2. Dificultad leve, compatible con empleo de tiempo completo." };
+  if (grade === 3) return { label: "Compromiso moderado", color: C.amber, detail: "Grado 3. Dificultad significativa que afecta empleo/actividades, pero marcha independiente." };
+  return { label: "Compromiso severo", color: C.wine, detail: "Grado 4-5. Marcha dependiente o postración; alta prioridad de manejo." };
+}
+
+const ALL_STEPS = [
+  ...MJOA_SECTIONS.map((s) => ({ scale: "mJOA", ...s })),
+  { scale: "Nurick", key: "nurick", title: "Escala de Nurick", subtitle: "Calificación clínico-funcional de la marcha", options: NURICK_OPTIONS },
+];
+const TOTAL_STEPS = ALL_STEPS.length;
+
+function calcMJOA(answers) {
+  const sum = MJOA_SECTIONS.reduce((acc, s) => acc + answers[s.key], 0);
+  return { sum, maxPossible: 18 };
+}
+
+function buildJSONPayload({ patient, momentoLabel, mjoaAnswers, nurickGrade }) {
+  const mjoa = calcMJOA(mjoaAnswers);
+  return {
+    nombre_paciente: patient.nombre,
+    edad: patient.edad,
+    fecha_evaluacion: patient.fecha,
+    momento: momentoLabel,
+    mJOA_total: mjoa.sum,
+    Nurick_grado: nurickGrade,
+  };
+}
+
+async function sendToSheet(payload) {
+  if (!SHEET_WEBHOOK_URL || SHEET_WEBHOOK_URL === "PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_CERVICAL") {
+    throw new Error("URL del Apps Script no configurada");
+  }
+  const res = await fetch(SHEET_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Respuesta no OK del servidor: " + res.status);
+  return res.json().catch(() => ({}));
+}
+
+function buildCSVRow({ patient, momentoLabel, mjoaAnswers, nurickGrade }) {
+  const mjoa = calcMJOA(mjoaAnswers);
+  const headers = ["nombre_paciente", "edad", "fecha_evaluacion", "momento", "mJOA_total", "Nurick_grado"];
+  const row = [patient.nombre, patient.edad, patient.fecha, momentoLabel, mjoa.sum, nurickGrade];
+  const escape = (v) => {
+    const s = String(v);
+    const needsQuotes = s.indexOf(",") !== -1 || s.indexOf(String.fromCharCode(34)) !== -1 || s.indexOf("\n") !== -1;
+    if (!needsQuotes) return s;
+    const q = String.fromCharCode(34);
+    const doubled = s.split(q).join(q + q);
+    return q + doubled + q;
+  };
+  return { headers, row, csv: headers.map(escape).join(",") + "\n" + row.map(escape).join(",") };
+}
+
+function downloadCSV(content, filename) {
+  const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function ProgressBar({ value, max, color }) {
+  const pct = Math.min(100, (value / max) * 100);
+  return (
+    <div style={{ width: "100%", height: 6, background: C.sandDeep, borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width 0.35s cubic-bezier(.4,0,.2,1)" }} />
+    </div>
+  );
+}
+
+function OptionList({ options, selected, onSelect, accent }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {options.map((opt, idx) => {
+        const isSelected = selected === idx;
+        return (
+          <button
+            key={idx}
+            type="button"
+            onClick={() => onSelect(idx)}
+            style={{
+              textAlign: "left", padding: "14px 16px", borderRadius: 12,
+              border: isSelected ? `1.5px solid ${accent}` : `1.5px solid ${C.line}`,
+              background: isSelected ? `${accent}0D` : C.white,
+              cursor: "pointer", fontSize: 15, lineHeight: 1.45, color: C.ink,
+              transition: "all 0.15s ease", display: "flex", alignItems: "flex-start", gap: 12,
+              boxShadow: isSelected ? `0 2px 10px ${accent}22` : "none", width: "100%",
+              touchAction: "manipulation",
+            }}
+          >
+            <span style={{
+              flexShrink: 0, width: 22, height: 22, borderRadius: "50%", marginTop: 1,
+              border: isSelected ? `1.5px solid ${accent}` : `1.5px solid ${C.inkFaint}`,
+              background: isSelected ? accent : "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              {isSelected && <span style={{ color: "white", fontSize: 12, fontWeight: 700 }}>✓</span>}
+            </span>
+            <span>{opt}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function NavButtons({ onBack, onNext, nextLabel, disabled, accent, showBack, warning }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+      {warning && (
+        <div style={{ fontSize: 12.5, color: C.wine, fontWeight: 600, textAlign: "center" }}>
+          Selecciona un hallazgo para continuar.
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 10 }}>
+        {showBack && (
+          <button type="button" onClick={onBack} style={{
+            padding: "13px 18px", borderRadius: 12, border: `1.5px solid ${C.line}`,
+            background: C.white, color: C.inkSoft, fontSize: 15, cursor: "pointer", fontWeight: 600,
+            touchAction: "manipulation",
+          }}>Atrás</button>
+        )}
+        <button type="button" onClick={onNext} style={{
+          flex: 1, padding: "13px 18px", borderRadius: 12, border: "none",
+          background: disabled ? C.inkFaint : accent, color: "white", fontSize: 15.5, fontWeight: 700,
+          cursor: "pointer", touchAction: "manipulation",
+          boxShadow: disabled ? "none" : `0 4px 14px ${accent}40`,
+        }}>{nextLabel}</button>
+      </div>
+    </div>
+  );
+}
+
+const labelStyle = { display: "block", fontSize: 13, fontWeight: 700, color: C.navy, marginBottom: 6, letterSpacing: 0.2 };
+const inputStyle = {
+  width: "100%", padding: "13px 14px", borderRadius: 10, border: `1.5px solid ${C.line}`,
+  fontSize: 16, color: C.ink, background: C.white, boxSizing: "border-box", fontFamily: "inherit",
+};
+
+function PatientIntake({ onSubmit }) {
+  const [nombre, setNombre] = useState("");
+  const [edad, setEdad] = useState("");
+  const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
+  const [momento, setMomento] = useState(null);
+  const [touched, setTouched] = useState(false);
+
+  const edadValida = edad !== "" && /^\d+$/.test(edad) && Number(edad) > 0 && Number(edad) < 120;
+  const canSubmit = nombre.trim().length > 1 && edadValida && momento && fecha;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div>
+        <label style={labelStyle}>Nombre completo del paciente *</label>
+        <input
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          placeholder="Escriba el nombre"
+          style={inputStyle}
+          autoCapitalize="words"
+          autoCorrect="off"
+          autoComplete="name"
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Edad (años) *</label>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={edad}
+          onChange={(e) => setEdad(e.target.value.replace(/[^\d]/g, "").slice(0, 3))}
+          placeholder="Ej. 58"
+          style={inputStyle}
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Fecha de evaluación *</label>
+        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Momento de la evaluación *</label>
+        <p style={{ fontSize: 13, color: C.inkSoft, margin: "2px 0 10px", lineHeight: 1.5 }}>
+          Selecciona la etapa de evolución respecto a la cirugía de columna cervical.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {MOMENTOS.map((m) => {
+            const isSel = momento === m.key;
+            return (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setMomento(m.key)}
+                style={{
+                  padding: "12px 10px", borderRadius: 10,
+                  border: isSel ? `1.5px solid ${C.navy}` : `1.5px solid ${C.line}`,
+                  background: isSel ? C.navy : C.white, color: isSel ? "white" : C.ink,
+                  fontSize: 13.5, fontWeight: 600, cursor: "pointer", textAlign: "center", lineHeight: 1.3,
+                  touchAction: "manipulation",
+                }}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {touched && !canSubmit && (
+        <div style={{ fontSize: 12.5, color: C.wine, fontWeight: 600 }}>
+          Completa nombre, edad, fecha y momento de evaluación para continuar.
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => { setTouched(true); if (canSubmit) onSubmit({ nombre: nombre.trim(), edad: Number(edad), fecha, momento }); }}
+        style={{
+          padding: "14px 18px", borderRadius: 12, border: "none", marginTop: 4,
+          background: canSubmit ? C.navy : C.inkFaint, color: "white",
+          fontSize: 16, fontWeight: 700, cursor: "pointer", touchAction: "manipulation",
+          boxShadow: canSubmit ? `0 4px 14px ${C.navy}40` : "none",
+        }}
+      >
+        Comenzar evaluación
+      </button>
+    </div>
+  );
+}
+
+function Questionnaire({ onFinish }) {
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [warning, setWarning] = useState(false);
+
+  const current = ALL_STEPS[step];
+  const isMJOA = current.scale === "mJOA";
+  const accent = isMJOA ? C.navy : C.wine;
+  const selected = answers[current.key];
+  const isLast = step === TOTAL_STEPS - 1;
+  const isFirstNurick = !isMJOA;
+
+  const select = (idx) => {
+    setAnswers((p) => ({ ...p, [current.key]: idx }));
+    setWarning(false);
+  };
+
+  const goNext = () => {
+    if (selected === undefined) {
+      setWarning(true);
+      return;
+    }
+    setWarning(false);
+    if (isLast) {
+      onFinish(answers);
+    } else {
+      setStep((s) => s + 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const goBack = () => {
+    setWarning(false);
+    setStep((s) => s - 1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7, fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>
+          <span>{current.scale} · {step + 1} / {TOTAL_STEPS}</span>
+          <span>{Math.round(((step + 1) / TOTAL_STEPS) * 100)}%</span>
+        </div>
+        <ProgressBar value={step + 1} max={TOTAL_STEPS} color={accent} />
+      </div>
+
+      {isFirstNurick && (
+        <div style={{ background: `${C.wine}10`, border: `1px dashed ${C.wine}55`, borderRadius: 10, padding: "10px 12px", fontSize: 13, color: C.wine, fontWeight: 600, textAlign: "center" }}>
+          mJOA completado. Ahora califica la escala de Nurick.
+        </div>
+      )}
+
+      <div>
+        <h2 style={{ fontSize: 19, fontWeight: 800, color: accent, margin: 0 }}>{current.title}</h2>
+        {current.subtitle && <p style={{ fontSize: 13.5, color: C.inkSoft, margin: "3px 0 0" }}>{current.subtitle}</p>}
+      </div>
+
+      <OptionList options={current.options} selected={selected} onSelect={select} accent={accent} />
+
+      <NavButtons
+        showBack={step > 0}
+        onBack={goBack}
+        onNext={goNext}
+        nextLabel={isLast ? "Finalizar y ver resultados" : "Siguiente"}
+        disabled={selected === undefined}
+        accent={accent}
+        warning={warning}
+      />
+    </div>
+  );
+}
+
+function BigScore({ value, suffix, label, color }) {
+  return (
+    <div style={{ background: `linear-gradient(135deg, ${color}, ${color}DD)`, color: "white", borderRadius: 16, padding: "24px 18px", textAlign: "center" }}>
+      <div style={{ fontSize: 40, fontWeight: 800, lineHeight: 1 }}>{value}{suffix}</div>
+      <div style={{ fontSize: 12.5, opacity: 0.88, marginTop: 6, fontWeight: 600 }}>{label}</div>
+    </div>
+  );
+}
+
+function PatientHeader({ patient, momentoLabel }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.sand, borderRadius: 10, fontSize: 13 }}>
+      <div>
+        <div style={{ fontWeight: 700, color: C.ink }}>{patient.nombre} · {patient.edad} años</div>
+        <div style={{ color: C.inkFaint, fontSize: 11.5 }}>{patient.fecha}</div>
+      </div>
+      <div style={{ background: C.navy, color: "white", padding: "4px 10px", borderRadius: 20, fontSize: 11.5, fontWeight: 700 }}>
+        {momentoLabel}
+      </div>
+    </div>
+  );
+}
+
+function CombinedResult({ patient, mjoaAnswers, nurickGrade, onRestart }) {
+  const [copied, setCopied] = useState(false);
+  const [sheetStatus, setSheetStatus] = useState("sending");
+  const mjoa = calcMJOA(mjoaAnswers);
+  const mjoaInterp = mjoaInterpretation(mjoa.sum);
+  const nurickInterp = nurickInterpretation(nurickGrade);
+  const momentoLabel = MOMENTOS.find((m) => m.key === patient.momento)?.label || patient.momento;
+
+  React.useEffect(() => {
+    const payload = buildJSONPayload({ patient, momentoLabel, mjoaAnswers, nurickGrade });
+    sendToSheet(payload)
+      .then(() => setSheetStatus("sent"))
+      .catch(() => setSheetStatus("failed"));
+  }, []);
+
+  const retrySend = () => {
+    setSheetStatus("sending");
+    const payload = buildJSONPayload({ patient, momentoLabel, mjoaAnswers, nurickGrade });
+    sendToSheet(payload)
+      .then(() => setSheetStatus("sent"))
+      .catch(() => setSheetStatus("failed"));
+  };
+
+  const handleExport = () => {
+    const { csv } = buildCSVRow({ patient, momentoLabel, mjoaAnswers, nurickGrade });
+    downloadCSV(csv, `Cervical_${patient.nombre.replace(/\s+/g, "_")}_${momentoLabel.replace(/\s+/g, "_")}_${patient.fecha}.csv`);
+  };
+  const handleCopy = async () => {
+    const { headers, row } = buildCSVRow({ patient, momentoLabel, mjoaAnswers, nurickGrade });
+    const text = headers.join("\t") + "\n" + row.join("\t");
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        throw new Error("Clipboard API no disponible");
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch (err) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      } catch (err2) {
+        alert("No se pudo copiar automáticamente. Usa el botón de descargar CSV.");
+      }
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <PatientHeader patient={patient} momentoLabel={momentoLabel} />
+
+      {sheetStatus === "sending" && (
+        <div style={{ background: `${C.amber}15`, border: `1px solid ${C.amber}55`, borderRadius: 10, padding: "10px 12px", fontSize: 13, color: C.amber, fontWeight: 600, textAlign: "center" }}>
+          Enviando datos a la base de datos…
+        </div>
+      )}
+      {sheetStatus === "sent" && (
+        <div style={{ background: `${C.good}15`, border: `1px solid ${C.good}55`, borderRadius: 10, padding: "10px 12px", fontSize: 13, color: C.good, fontWeight: 600, textAlign: "center" }}>
+          ✓ Datos guardados correctamente en la base de datos
+        </div>
+      )}
+      {sheetStatus === "failed" && (
+        <div style={{ background: `${C.wine}15`, border: `1px solid ${C.wine}55`, borderRadius: 10, padding: "10px 12px", fontSize: 13, color: C.wine, fontWeight: 600, textAlign: "center" }}>
+          No se pudo guardar automáticamente. Usa "Descargar CSV" o "Copiar datos" como respaldo, o intenta de nuevo.
+          <div style={{ marginTop: 8 }}>
+            <button type="button" onClick={retrySend} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: C.wine, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              Reintentar envío
+            </button>
+          </div>
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 18, fontWeight: 800, color: C.navy, margin: 0 }}>Resultados de la evaluación</h2>
+
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.inkFaint, marginBottom: 8, letterSpacing: 0.5 }}>mJOA — FUNCIÓN NEUROLÓGICA</div>
+        <BigScore value={mjoa.sum} suffix="/18" label="Puntaje total mJOA" color={C.navy} />
+        <div style={{ background: C.sand, borderRadius: 12, padding: 14, borderLeft: `4px solid ${mjoaInterp.color}`, marginTop: 10 }}>
+          <div style={{ fontWeight: 800, color: mjoaInterp.color, marginBottom: 4, fontSize: 15 }}>{mjoaInterp.label}</div>
+          <div style={{ fontSize: 13.5, color: C.inkSoft, lineHeight: 1.5 }}>{mjoaInterp.detail}</div>
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.inkFaint, marginBottom: 8, letterSpacing: 0.5 }}>NURICK — FUNCIÓN DE MARCHA</div>
+        <BigScore value={nurickGrade} suffix="" label="Grado de Nurick (0-5)" color={C.wine} />
+        <div style={{ background: C.sand, borderRadius: 12, padding: 14, borderLeft: `4px solid ${nurickInterp.color}`, marginTop: 10 }}>
+          <div style={{ fontWeight: 800, color: nurickInterp.color, marginBottom: 4, fontSize: 15 }}>{nurickInterp.label}</div>
+          <div style={{ fontSize: 13.5, color: C.inkSoft, lineHeight: 1.5 }}>{nurickInterp.detail}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button type="button" onClick={handleExport} style={{ flex: 1, padding: "13px 14px", borderRadius: 10, border: "none", background: C.navyDeep, color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+            ⬇ Descargar CSV
+          </button>
+          <button type="button" onClick={handleCopy} style={{ flex: 1, padding: "13px 14px", borderRadius: 10, border: `1.5px solid ${C.line}`, background: "white", color: C.ink, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+            {copied ? "✓ Copiado" : "Copiar datos"}
+          </button>
+        </div>
+        <button type="button" onClick={onRestart} style={{ padding: "12px 18px", borderRadius: 10, border: `1.5px solid ${C.line}`, background: "white", color: C.inkSoft, fontSize: 14.5, fontWeight: 700, cursor: "pointer" }}>
+          Nueva evaluación
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EscalasApp() {
+  const [view, setView] = useState("intake");
+  const [patient, setPatient] = useState(null);
+  const [finalAnswers, setFinalAnswers] = useState(null);
+  const [qKey, setQKey] = useState(0);
+
+  const mjoaAnswers = finalAnswers
+    ? Object.fromEntries(MJOA_SECTIONS.map((s) => [s.key, finalAnswers[s.key]]))
+    : null;
+  const nurickGrade = finalAnswers ? finalAnswers.nurick : null;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.sand, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", display: "flex", justifyContent: "center", padding: "28px 16px" }}>
+      <div style={{ width: "100%", maxWidth: 460 }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ fontSize: 11.5, letterSpacing: 2, color: C.amber, fontWeight: 800, textTransform: "uppercase" }}>
+            Evaluación clínica · Cervical
+          </div>
+          <div style={{ fontSize: 25, fontWeight: 800, color: C.navy, marginTop: 3, letterSpacing: -0.3 }}>
+            mJOA · Nurick
+          </div>
+        </div>
+
+        <div style={{ background: "white", borderRadius: 20, padding: 24, boxShadow: "0 8px 30px rgba(19,41,75,0.10)", border: `1px solid ${C.line}` }}>
+
+          {view === "intake" && (
+            <>
+              <h2 style={{ fontSize: 17, fontWeight: 800, color: C.navy, margin: "0 0 6px" }}>Datos de la evaluación</h2>
+              <p style={{ fontSize: 13, color: C.inkSoft, margin: "0 0 16px", lineHeight: 1.5 }}>
+                Escala clínica de exploración (mJOA + Nurick). Llenar según hallazgos de la exploración física.
+              </p>
+              <PatientIntake onSubmit={(p) => { setPatient(p); setView("questionnaire"); }} />
+            </>
+          )}
+
+          {view === "questionnaire" && (
+            <Questionnaire key={qKey} onFinish={(answers) => { setFinalAnswers(answers); setView("result"); }} />
+          )}
+
+          {view === "result" && patient && mjoaAnswers && nurickGrade !== null && (
+            <CombinedResult
+              patient={patient}
+              mjoaAnswers={mjoaAnswers}
+              nurickGrade={nurickGrade}
+              onRestart={() => { setFinalAnswers(null); setPatient(null); setQKey((k) => k + 1); setView("intake"); }}
+            />
+          )}
+        </div>
+
+        <div style={{ textAlign: "center", marginTop: 18, fontSize: 11, color: C.inkFaint }}>
+          Herramienta de apoyo clínico · No sustituye juicio médico
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<EscalasApp />);
+</script>
+</body>
+</html>
